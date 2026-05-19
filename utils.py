@@ -2,9 +2,8 @@
 """
 Created on Wed Feb 26 11:02:16 2025
 
-@author: Jialin Zhang
+@author: JL
 """
-
 import os
 import random
 import numpy as np
