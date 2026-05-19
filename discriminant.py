@@ -1,24 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sun Dec  3 16:25:18 2024
+Created on Sun Dec  3 16:25:18 2023
 
-@author: Jialin Zhang
+@author: JL
 """
 
 import numpy as np
 from scipy.sparse import *
-import numba  
-
 from sklearn.preprocessing import MinMaxScaler
 
 from numpy import matrix
+
+
 
 def sequence_scale(x):
   scaler = MinMaxScaler(feature_range=(0, 1))
   score= scaler.fit_transform(x)
   return score
 
-def Discriminant_score(X, y, labda): #Function for calculating the LDF index.
+def Discriminant_score(X, y, labda):
     """
 
     Input
