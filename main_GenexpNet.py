@@ -2,7 +2,7 @@
 """
 Created on Thu Oct 24 21:50:49 2024
 
-@author: gaga6
+@author: JL
 """
 
 import time
@@ -106,6 +106,7 @@ def parse_args():
     
     args.device = "cuda" if torch.cuda.is_available() else "cpu"
     return args
+
 
 #Pretrain the attention module.
 def Attention_PREtrain(model, train_loader, optimazer_pre, scheduler_pre, LDF_index, ATT_loss, args):
@@ -230,7 +231,6 @@ def CLA_train(model, train_loader, val_loader, optimizer, scheduler_cla, cla_los
     
     return history_avg,best_epoch,All_A,new_x 
     
-    
 def CLA_val(model, val_loader, criterion, args):
     
     model.eval()
@@ -269,116 +269,157 @@ def CLA_val(model, val_loader, criterion, args):
     return avg_val_loss, acc/times, f1/times, recall/times, precision/times, sensitivity/times, specificity/times, predictions 
     
 
+
 def set_loader_Splited_scRNA(args):
-    
+
+    # 1. Load training, validation, and test data
     train_data = sc.read_h5ad(
-        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','Train_',args.dataset,'.h5ad']))
-    
+        f'./GenexpNet/datasets/{args.data_type}/preprocessed/splited/splited_{args.dataset}/Train_{args.dataset}.h5ad'
+    )
     val_data = sc.read_h5ad(
-        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','val_',args.dataset,'.h5ad']))
-    
+        f'./GenexpNet/datasets/{args.data_type}/preprocessed/splited/splited_{args.dataset}/Test_{args.dataset}.h5ad'
+    )
     test_data = sc.read_h5ad(
-        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','Test_',args.dataset,'.h5ad']))
-    
-    with open(''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','Splited_',args.dataset,'/','dict_',args.dataset,'.json'])) as file:
+        f'./GenexpNet/datasets/{args.data_type}/preprocessed/splited/splited_{args.dataset}/Test_{args.dataset}.h5ad'
+    )
+
+    # 2. Load label dictionary
+    label_dict_path = f'./GenexpNet/datasets/{args.data_type}/preprocessed/splited/Splited_{args.dataset}/dict_{args.dataset}.json'
+    with open(label_dict_path) as file:
         label_dict = json.load(file)
-    
-    n_row, n_col = train_data.shape
-    
-    print("number of samples is {}".format(n_row))
-    
-    X_train = pd.DataFrame(train_data.X)
-    X_val = pd.DataFrame(val_data.X)
-    X_test = pd.DataFrame(test_data.X)
-    
-    y_train = pd.DataFrame(train_data.obs.label.values)
-    y_val = pd.DataFrame(val_data.obs.label.values)
-    y_test = pd.DataFrame(test_data.obs.label.values)
-      
-    y_all  = pd.concat([y_train, y_val, y_test], axis=0)
-    
-    args.n_class = len(set(np.array(y_all.values.reshape(-1))))
-    
-     
-    tensor_TrainValues = torch.FloatTensor(np.array(X_train)).float()
-    tensor_ValValues = torch.FloatTensor(np.array(X_val)).float()
-    tensor_TestValues = torch.FloatTensor(np.array(X_test)).float()
-     
-    tensor_TrainLabels = torch.FloatTensor(y_train.values.reshape(-1)).float()
-    tensor_ValLabels = torch.FloatTensor(y_val.values.reshape(-1)).float()
-    tensor_TestLabels = torch.FloatTensor(y_test.values.reshape(-1)).float()
-    
+
+    # 3. Load feature index (marker / co‑expressed genes), ignoring column names
+    feature_index_path = f'./GenexpNet/datasets/{args.data_type}/preprocessed/feature_list_{args.dataset}_{args.t_gene}.csv'
+    feature_index = pd.read_csv(feature_index_path, header=None)[0].tolist()  # First column contains gene names
+
+    feature_index = [str(x) for x in feature_index]
+
+    # 4. Filter the columns corresponding to feature_index in train/val/test sets
+    train_gene_list = list(train_data.var_names)  # Use var_names to ensure gene name strings
+    feature_cols = [i for i, g in enumerate(train_gene_list) if g in feature_index]
+
+    X_train = train_data.X[:, feature_cols]
+    X_val   = val_data.X[:, feature_cols]
+    X_test  = test_data.X[:, feature_cols]
+
+    # 5. Labels
+    y_train = train_data.obs['label'].values.reshape(-1)
+    y_val   = val_data.obs['label'].values.reshape(-1)
+    y_test  = test_data.obs['label'].values.reshape(-1)
+
+    # 6. Sample count and data dimensions
+    n_row, n_col = X_train.shape
+    print(f"Number of samples: {n_row}, Number of features: {n_col}")
     args.data_dim = n_col
-    
-    return tensor_TrainValues, tensor_ValValues, tensor_TestValues, tensor_TrainLabels, tensor_ValLabels, tensor_TestLabels, label_dict
 
+    # 7. Convert to tensors
+    tensor_TrainValues = torch.FloatTensor(np.array(X_train)).float()
+    tensor_ValValues   = torch.FloatTensor(np.array(X_val)).float()
+    tensor_TestValues  = torch.FloatTensor(np.array(X_test)).float()
 
-def set_loader_Splited_scRNA_OverSample(args, alpha=0.5, threshold=100): 
-    
+    tensor_TrainLabels = torch.FloatTensor(y_train).float()
+    tensor_ValLabels   = torch.FloatTensor(y_val).float()
+    tensor_TestLabels  = torch.FloatTensor(y_test).float()
+
+    args.n_class = len(set(np.concatenate([y_train, y_val, y_test])))
+
+    return tensor_TrainValues, tensor_ValValues, tensor_TestValues, \
+           tensor_TrainLabels, tensor_ValLabels, tensor_TestLabels, label_dict
+
+def set_loader_Splited_scRNA_OverSample(args, alpha=0.5, threshold=100):
+
+    # 1. Load training/validation/test sets
     train_data = sc.read_h5ad(
-        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','Train_',args.dataset,'.h5ad']))
-    
+        f'E./GenexpNet/datasets/{args.data_type}/preprocessed/splited/splited_{args.dataset}/Train_{args.dataset}.h5ad'
+    )
     val_data = sc.read_h5ad(
-        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','Test_',args.dataset,'.h5ad']))
-    
+        f'./GenexpNet/datasets/{args.data_type}/preprocessed/splited/splited_{args.dataset}/Test_{args.dataset}.h5ad'
+    )
     test_data = sc.read_h5ad(
-        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','Test_',args.dataset,'.h5ad']))
-    
-    with open(''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','Splited_',args.dataset,'/','dict_',args.dataset,'.json'])) as file:
-        label_dict = json.load(file)
-    
-    n_row, n_col = train_data.shape
-    
-    print("number of samples is {}".format(n_row))
-    
-    X_train = pd.DataFrame(train_data.X)
-    X_val = pd.DataFrame(val_data.X)
-    X_test = pd.DataFrame(test_data.X)
-    
-    y_train = pd.DataFrame(train_data.obs.label.values)
-    y_val = pd.DataFrame(val_data.obs.label.values)
-    y_test = pd.DataFrame(test_data.obs.label.values)
-    
-    y_all  = pd.concat([y_train, y_val, y_test], axis=0)
-    
+        f'./GenexpNet/datasets/{args.data_type}/preprocessed/splited/splited_{args.dataset}/Test_{args.dataset}.h5ad'
+    )
 
-    args.n_class = len(set(np.array(y_all.values.reshape(-1))))
+    # 2. Load label dictionary
+    label_dict_path = f'./GenexpNet/datasets/{args.data_type}/preprocessed/splited/Splited_{args.dataset}/dict_{args.dataset}.json'
+    with open(label_dict_path) as file:
+        label_dict = json.load(file)
+
+    # 3. Load feature index (marker/co‑expressed genes)
+    feature_index_path = f'./GenexpNet/datasets/{args.data_type}/preprocessed/feature_list_{args.dataset}_{args.t_gene}.csv'
+    feature_index = pd.read_csv(feature_index_path, header=None)[0].tolist()  # First column contains gene names
+    feature_index = [str(x) for x in feature_index]
+
+    # 4. Filter the columns corresponding to feature_index in train/val/test sets
+    train_gene_list = list(train_data.var_names)  # Use var_names to ensure gene name strings
+    feature_cols = [i for i, g in enumerate(train_gene_list) if g in feature_index]
+
+    X_train = train_data.X[:, feature_cols]
+    X_val   = val_data.X[:, feature_cols]
+    X_test  = test_data.X[:, feature_cols]
+
+    # Convert sparse matrices to dense numpy arrays for further processing
+    if hasattr(X_train, "toarray"): X_train = X_train.toarray()
+    if hasattr(X_val, "toarray"): X_val = X_val.toarray()
+    if hasattr(X_test, "toarray"): X_test = X_test.toarray()
+
+    # 5. Labels
+    y_train = train_data.obs['label'].values.reshape(-1)
+    y_val   = val_data.obs['label'].values.reshape(-1)
+    y_test  = test_data.obs['label'].values.reshape(-1)
+
+    # 6. Sample count and data dimensions
+    n_row, n_col = X_train.shape
+    print(f"Number of samples: {n_row}, Number of features: {n_col}")
     args.data_dim = n_col
-    
-     
+    args.n_class = len(set(np.concatenate([y_train, y_val, y_test])))
+
+    # 7. Convert to tensors
     tensor_TrainValues = torch.FloatTensor(np.array(X_train)).float()
-    tensor_ValValues = torch.FloatTensor(np.array(X_val)).float()
-    tensor_TestValues = torch.FloatTensor(np.array(X_test)).float()
+    tensor_ValValues   = torch.FloatTensor(np.array(X_val)).float()
+    tensor_TestValues  = torch.FloatTensor(np.array(X_test)).float()
+
+    tensor_TrainLabels = torch.as_tensor(y_train, dtype=torch.long)
+    tensor_ValLabels   = torch.as_tensor(y_val, dtype=torch.long)
+    tensor_TestLabels  = torch.as_tensor(y_test, dtype=torch.long)
+
+    # ==========================================
+    # 8. Over‑Sampling mechanism
+    # ==========================================
     
-    tensor_TrainLabels = torch.as_tensor(y_train.values.reshape(-1),dtype=torch.long)
-    tensor_ValLabels = torch.as_tensor(y_val.values.reshape(-1),dtype=torch.long)
-    tensor_TestLabels = torch.as_tensor(y_test.values.reshape(-1),dtype=torch.long)
-    
+    # Count samples per class in the training set, clamp_min(1) to avoid division by zero
     class_counts = torch.bincount(tensor_TrainLabels, minlength=args.n_class).clamp_min(1)
     
+    # Compute maximum imbalance ratio
     imbalance_ratio = class_counts.max().item() / class_counts.min().item()
     
+    # Determine weighting strategy based on imbalance severity
     if imbalance_ratio > threshold:
-        
-        class_weights = 1.0 / (class_counts.float()  ** alpha)
-        
+        # If severely imbalanced, apply smoothing alpha to prevent extreme penalties
+        class_weights = 1.0 / (class_counts.float() ** alpha)
     else:
+        # Normal inverse weighting
         class_weights = 1.0 / class_counts.float()  
         
+    # Normalize weights
     class_weights = class_weights / class_weights.mean()
     
+    # Assign weight to each training sample according to its class
     sample_weights = class_weights[tensor_TrainLabels]
     
-    samplers = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
+    # Initialize WeightedRandomSampler
+    samplers = WeightedRandomSampler(
+        weights=sample_weights, 
+        num_samples=len(sample_weights), 
+        replacement=True
+    )
 
-    return tensor_TrainValues, tensor_ValValues, tensor_TestValues, tensor_TrainLabels, tensor_ValLabels, tensor_TestLabels, label_dict, samplers
+    return tensor_TrainValues, tensor_ValValues, tensor_TestValues, \
+           tensor_TrainLabels, tensor_ValLabels, tensor_TestLabels, label_dict, samplers
 
 def set_model(args):
-
-    model = GenexpNet(input_dim = args.data_dim, n_class = args.n_class, dropout = args.dropout)
-
-    para_cla = model.parameters()
     
+    model = GenexpNet(input_dim = args.data_dim, n_class = args.n_class, dropout = args.dropout)
+    para_cla = model.parameters()
     para_att = [
               {'params': model.se_enc.parameters()},
               {'params': model.se_tanh.parameters()},
@@ -407,6 +448,7 @@ def set_model(args):
     return model, cla_loss, ATT_loss, optimazer_pre, optimizer_cla, scheduler_1, scheduler_2
 
 
+
 def main():
     
         args = parse_args()
@@ -416,8 +458,7 @@ def main():
             Train_data, Val_data, Test_data, Train_label, Val_label, Test_label, label_dict, samplers = set_loader_Splited_scRNA_OverSample(args)
         else:
             Train_data, Val_data, Test_data, Train_label, Val_label, Test_label, label_dict = set_loader_Splited_scRNA(args)
-                
-            
+                            
         LDF_index = Discriminant_score(Train_data.numpy(), Train_label.numpy(),args.beta)
             
         Train_dataset = Data.TensorDataset(Train_data, Train_label)
@@ -513,14 +554,19 @@ def main():
                         "specificity" : specificity_list,
                         "time_cost" : times_list   
             }
+        
+     
             
         result =  pd.DataFrame(contact_list)
-            
-        result.to_csv(''.join(['E:/My_project/GenexpNet/datasets/result/',args.data_type,'/',args.dataset,'/','Result_GenexpNet_',args.dataset,'.csv'])
-                    ,encoding='gbk',index=None)
-                                
+        
+        result.to_csv(
+            f'./GenexpNet/datasets/result/{args.data_type}/{args.dataset}/Result_GenexpNet_{args.dataset}_{args.t_gene}.csv',
+            encoding='gbk',
+            index=False)
+                
 if __name__ == "__main__":
     main()        
+    
     
     
     
