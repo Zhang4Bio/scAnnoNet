@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Nov 28 16:36:41 2024
+Created on Tue Nov 28 16:36:41 2023
 
-@author: Jialin Zhang
+@author: JL
 """
 
 import torch.nn as nn
